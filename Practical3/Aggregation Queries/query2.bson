@@ -1,0 +1,14 @@
+db.orders.aggregate([
+  { $match: { status: "PAID" } },
+  { $unwind: "$items" },
+  {
+    $group: {
+      _id: "$items.productId",
+      productName: { $first: "$items.productName" },
+      totalRevenue: { $sum: "$items.lineTotal" },
+      totalQuantity: { $sum: "$items.quantity" }
+    }
+  },
+  { $sort: { totalRevenue: -1 } },
+  { $limit: 5 }
+]);

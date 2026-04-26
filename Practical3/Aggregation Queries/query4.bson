@@ -1,0 +1,14 @@
+db.products.aggregate([
+  { $lookup: { from: "categories", localField: "categoryId", foreignField: "_id", as: "category" } },
+  { $unwind: "$category" },
+  {
+    $project: {
+      _id: 0,
+      name: 1,
+      price: 1,
+      "attributes.brand": 1,
+      categoryName: "$category.name"
+    }
+  },
+  { $sort: { categoryName: 1, name: 1 } }
+]);

@@ -1,0 +1,19 @@
+db.orders.aggregate([
+  { $match: { status: "PAID" } },
+  {
+    $group: {
+      _id: { year: { $year: "$createdAt" }, month: { $month: "$createdAt" }, day: { $dayOfMonth: "$createdAt" } },
+      totalRevenue: { $sum: "$grandTotal" },
+      orderCount: { $sum: 1 }
+    }
+  },
+  {
+    $project: {
+      _id: 0,
+      date: { $dateFromParts: { year: "$_id.year", month: "$_id.month", day: "$_id.day" } },
+      totalRevenue: 1,
+      orderCount: 1
+    }
+  },
+  { $sort: { date: 1 } }
+]);
