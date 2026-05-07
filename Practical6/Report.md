@@ -176,5 +176,228 @@ ping
 ACL WHOAMI
 ```
 
+# Part B
 
+## Theory
+
+Three concepts underpin database security in this practical:
+
+### 1 Authentication
+
+Authentication is the process of verifying the identity of a client connecting to the database. In MongoDB, this is done through usernames and passwords stored in the `admin` database (or another authentication database). Without authentication, anyone who can reach port 27017 can issue commands, which is a serious security risk.
+
+### 2 Role-Based Access Control (RBAC)
+
+RBAC enforces the principle of least privilege: each user receives only the permissions strictly necessary for their job. MongoDB ships with built-in roles such as `read`, `readWrite`, and `userAdminAnyDatabase`, and also allows administrators to create custom roles that grant specific actions on specific resources (databases or collections). When `--auth` is enabled, MongoDB enforces these roles for every operation.
+
+### 3 Encryption (TLS)
+
+Transport Layer Security (TLS) protects data while it travels across the network. Without TLS, an attacker on the same network can intercept passwords and data in plaintext. TLS uses certificates to verify identity and encrypts the entire communication channel between the client and server. MongoDB supports TLS through the `--tlsMode requireTLS` option together with a server certificate and a Certificate Authority file.
+
+
+
+##  Procedure
+
+Requirement 
+
+![alt text](screenshots/MongoDB-fig1.png)
+
+### Step 1: Create isolated working directory
+
+To keep the practical files separate from any system-wide MongoDB installation, an isolated working directory was created.
+
+```bash
+mkdir -p ~/dbs302-practical6/mongo/data
+mkdir -p ~/dbs302-practical6/mongo/logs
+mkdir -p ~/dbs302-practical6/mongo/tls
+```
+
+This produced three subdirectories: `data` for the database files, `logs` for the mongod log, and `tls` for the certificates created later.
+
+
+
+### Step 2: Start MongoDB without authentication (initial setup)
+
+Authentication was temporarily left off so the first admin user could be created. After that, authorization is enabled.
+
+```bash
+mongod --dbpath ~/dbs302-practical6/mongo/data \
+  --logpath ~/dbs302-practical6/mongo/logs/mongod.log \
+  --bind_ip 127.0.0.1 \
+  --port 27017 \
+  --fork
+```
+
+![alt text](screenshots/MongoDB-fig2.png)
+
+### Step 3: Create the root admin user
+
+Connected with mongosh:
+
+```bash
+mongosh --host 127.0.0.1 --port 27017
+```
+
+![alt text](screenshots/MongoDB-fig3.png)
+
+Inside mongosh:
+
+```javascript
+use admin
+
+db.createUser({
+  user: "rootAdmin",
+  pwd: "rootStrongPwd",
+  roles: [
+    { role: "userAdminAnyDatabase", db: "admin" },
+    { role: "dbAdminAnyDatabase", db: "admin" },
+    { role: "readWriteAnyDatabase", db: "admin" }
+  ]
+})
+```
+![alt text](screenshots/MongoDB-fig4.png)
+
+### Step 4: Restart MongoDB with authentication enabled
+
+The running mongod was stopped and restarted with the `--auth` flag, which enables RBAC enforcement for all subsequent connections.
+
+```bash
+# Find the running PID and stop it
+lsof -i :27017
+kill <PID>
+
+
+
+# Restart with --auth
+mongod --dbpath ~/dbs302-practical6/mongo/data \
+  --logpath ~/dbs302-practical6/mongo/logs/mongod.log \
+  --bind_ip 127.0.0.1 \
+  --port 27017 \
+  --auth \
+  --fork
+```
+
+![alt text](screenshots/MongoDB-fig5.png)
+
+![alt text](screenshots/MongoDB-fig6.png)
+
+### Step 5: Verify authentication is enforced
+
+**Test 1 — connect without credentials (should fail):**
+
+```bash
+mongosh --host 127.0.0.1 --port 27017
+```
+![alt text](screenshots/MongoDB-fig7.png)
+
+This denial confirms that anonymous access is blocked.
+
+**Test 2 — connect with valid credentials (should succeed):**
+
+```bash
+mongosh --host 127.0.0.1 --port 27017 \
+  -u rootAdmin -p rootStrongPwd \
+  --authenticationDatabase admin
+```
+
+![alt text](screenshots/MongoDB-fig8.png)
+
+Authentication succeeded and the response confirms `rootAdmin` is logged in with the expected roles.
+
+
+### Step 6: Create application database, custom role, and limited user
+
+Still inside mongosh as `rootAdmin`:
+
+```javascript
+use myapp
+
+db.runCommand({
+  createRole: "myAppRole",
+  privileges: [
+    {
+      resource: { db: "myapp", collection: "customers" },
+      actions: ["find", "insert", "update", "remove"]
+    }
+  ],
+  roles: []
+})
+```
+
+![alt text](screenshots/MongoDB-fig9.png)
+
+This custom role can perform only four operations on a single collection — a strict implementation of least privilege.
+
+```javascript
+db.createUser({
+  user: "appUser",
+  pwd: "appStrongPwd",
+  roles: [ { role: "myAppRole", db: "myapp" } ]
+})
+```
+![alt text](screenshots/MongoDB-fig10.png)
+
+### Step 7: Test RBAC with appUser — denial demonstration
+
+Connected as the limited user:
+
+```bash
+mongosh --host 127.0.0.1 --port 27017 \
+  -u appUser -p appStrongPwd \
+  --authenticationDatabase myapp
+```
+
+**Allowed operations (should succeed):**
+
+```javascript
+myapp> use myapp
+switched to db myapp
+
+myapp> db.customers.insertOne({ name: "Student One", city: "Phuntsholing" })
+
+myapp> db.customers.find()
+
+myapp> db.customers.insertOne({ name: "Test Student", city: "Thimphu" })
+
+```
+
+![alt text](screenshots/MongoDB-fig11.png)
+
+**Denied operations (should fail):**
+
+```javascript
+myapp> db.orders.insertOne({ item: "should fail" })
+
+
+myapp> use admin
+switched to db admin
+
+admin> db.system.users.find()
+
+```
+![alt text](screenshots/MongoDB-fig12.png)
+
+The RBAC system correctly denied access to:
+
+- A different collection (`orders`) within the same database
+- A completely different database (`admin`)
+
+`appUser` is restricted to the four allowed operations on `myapp.customers` only.
+
+
+
+## 6. Conclusion
+
+This practical demonstrated how authentication, role-based access control, and transport encryption together protect a MongoDB database from unauthorized access and network eavesdropping. Enabling `--auth` blocked anonymous clients from issuing any commands. Combining authentication with a custom role enforced the principle of least privilege at the database and collection level: `appUser` could read and write only the `myapp.customers` collection and was denied all other operations. Finally, requiring TLS ensured that credentials and data could not be intercepted on the network, since plain connections were refused outright.
+
+The exercise reinforced that database security is layered: any single control on its own is insufficient, but used together they create a defensible setup that aligns with common best practices for NoSQL deployments.
+
+
+## 7. Issues Encountered and Resolutions
+
+During the practical, the following issues were encountered and resolved:
+
+1. **MongoDB `--shutdown` flag not recognised** — newer versions of MongoDB (8.0) have removed this option. Resolved by using `lsof -i :27017` to find the running PID and stopping it with `kill <PID>` before restarting with the `--auth` flag.
+
+2. **MongoDB "Address already in use" error** — a previous mongod instance was still running on port 27017 after a failed start, causing the new mongod to exit immediately with exit code 48. Resolved by identifying the PID via `lsof -i :27017` and terminating it with `kill <PID>` before retrying.
 
